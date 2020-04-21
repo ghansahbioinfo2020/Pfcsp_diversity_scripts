@@ -1,0 +1,293 @@
+#!/usr/bin/python
+
+import os
+import sys
+import gzip 
+from optparse import OptionParser
+
+#
+# Translate vcf nucleotides to amino acids for each sample in
+# the vcf file
+# Usage:
+#			./vcf_to_amino_acids --help
+#
+
+
+CODONs = (
+('AAA', 'K'), ('AAC', 'N'), ('AAG', 'K'), ('AAT', 'N'), ('ACA', 'T'),
+('ACC', 'T'), ('ACG', 'T'), ('ACT', 'T'), ('AGA', 'R'), ('AGC', 'S'),
+('AGG', 'R'), ('AGT', 'S'), ('ATA', 'I'), ('ATC', 'I'), ('ATG', 'M'),
+('ATT', 'I'), ('CAA', 'Q'), ('CAC', 'H'), ('CAG', 'Q'), ('CAT', 'H'),
+('CCA', 'P'), ('CCC', 'P'), ('CCG', 'P'), ('CCT', 'P'), ('CGA', 'R'),
+('CGC', 'R'), ('CGG', 'R'), ('CGT', 'R'), ('CTA', 'L'), ('CTC', 'L'),
+('CTG', 'L'), ('CTT', 'L'), ('GAA', 'E'), ('GAC', 'D'), ('GAG', 'E'),
+('GAT', 'D'), ('GCA', 'A'), ('GCC', 'A'), ('GCG', 'A'), ('GCT', 'A'),
+('GGA', 'G'), ('GGC', 'G'), ('GGG', 'G'), ('GGT', 'G'), ('GTA', 'V'),
+('GTC', 'V'), ('GTG', 'V'), ('GTT', 'V'), ('TAA', 'O'), ('TAC', 'Y'), 
+('TAG', 'O'), ('TAT', 'Y'), ('TCA', 'S'), ('TCC', 'S'), ('TCG', 'S'),
+('TCT', 'S'), ('TGA', 'O'), ('TGC', 'C'), ('TGG', 'W'), ('TGT', 'C'),
+('TTA', 'L'), ('TTC', 'F'), ('TTG', 'L'), ('TTT', 'F')
+)
+
+def println(msg):
+	sys.stderr.write(msg.strip()+'\n')
+
+def getAminoAcid(codon):
+	if not len(codon) == 3:
+		println("Error: codons must be three (3) letters")
+		sys.exit(1)
+	code =  codon.upper().replace('U','T')
+	for c in CODONs:
+		if c[0] == code:
+			return c[1]
+	println("Error: Invalid codon: "+codon)
+	sys.exit(1)
+	
+def getDNAPair(n):
+	if n.upper() == 'A':
+		return 'T'
+	if n.upper() == 'C':
+		return 'G'
+	if n.upper() == 'G':
+		return 'C'
+	if n.upper() == 'T' or n.upper() == 'U':
+		return 'A'
+	println("Error: Invalid DNA nucleotide: "+n)
+	sys.exit(1)
+
+
+def getGenotypes(inp, out, REF, start, end):
+	'''
+	Compile the full nucleotide sequences of all samples
+	filling in the non-variant gaps from reference genome
+	'''
+	ALT = '' # altenate genotypes
+	GTs = [] # sample's genotypes
+	snps = 0 # number pf SNPs
+	rpos = start # next reference position
+	for line in inp:
+		if line.startswith("##"): continue
+		line = line.split()
+		if line[0] == "#CHROM":
+			samples = line[9:]
+			for s in samples:
+				GTs.append('')
+				GTs.append('')
+			println (str(len(samples))+" samples in vcf file.")
+			continue
+		
+		pos = int(line[1])
+		if pos > end:
+			break
+		if pos < start:
+			continue
+		
+		plen = pos - rpos
+		if plen > 0:
+			n = rpos - start
+			m = n + plen
+			ALT += REF[n:m]
+			for x in range(len(GTs)):
+				GTs[x] += REF[n:m]
+				
+		rpos = pos + 1 # next reference position
+		rref = REF[pos-start]
+		ref = line[3].strip().upper()
+		alt = line[4].strip().upper()
+		
+		if ref.__contains__(',') or alt.__contains__(','):
+			println("Error: Vcf file must contain only biallelic SNPs")
+			sys.exit(1)
+			
+		if not rref == ref:
+			println("Error: Reference nucleotides mismatch at position "+str(pos)+" ["+rref+" != "+ref+"]")
+			sys.exit(1)
+			
+		def get_gt(x):
+			try:
+				x = int(x)
+				if x == 0:
+					return ref
+				else:
+					return alt
+			except:
+				println("Error: invalid genotype field in vcf file")
+				sys.exit(1)
+		
+		ALT += alt
+		for (i,GT) in enumerate(line[9:]):
+			i *= 2
+			GT = GT.split(':')[0]
+			GT = GT.split('|')
+			if len(GT) == 1:
+				println("Error: Vcf file not phased.")
+				sys.exit(1)
+			GTs[i] += ''+get_gt(GT[0])
+			GTs[i+1] += ''+get_gt(GT[1])
+		snps += 1
+	
+	println(str(snps)+" SNPs found in vcf file")
+	
+	plen = end - rpos
+	if plen > -1:
+		plen += 1
+		ALT += REF[-plen:]
+		for x in range(len(GTs)):
+			GTs[x] += REF[-plen:]
+	return (samples, GTs, ALT)
+		
+		
+
+def translate(GTs, REF, ALT, isReverse, addAlt):
+	'''
+	Translate nucleotides to amino acids
+	'''
+	if not isReverse:
+		'''
+		If forward sequence, reverse it and get the pair of each nucleotide
+		'''
+		tmp = ''
+		for x in range(len(REF)-1, -1, -1):
+			tmp += getDNAPair(REF[x])
+		REF = tmp
+		tmp = ''
+		for x in range(len(ALT)-1, -1, -1):
+			tmp += getDNAPair(ALT[x])
+		ALT = tmp
+		
+		for i in range(len(GTs)):
+			tmp = ''
+			for x in range(len(GTs[i])-1, -1, -1):
+				tmp += getDNAPair(GTs[i][x])
+			GTs[i] = tmp
+		
+	aminos = ['' for x in GTs] # create spaces to contain data for all samples
+	aminos.append('') # extra space for reference genome
+	n = 1
+	if addAlt: 
+		aminos.append('') # extra space for altenate genome
+		n = 2 # sample starting point
+	
+	na = len(REF)/3 # number of amino acids
+	for i in range(na):
+		i *= 3
+		aminos[0] += getAminoAcid(REF[i:i+3])
+		if addAlt: aminos[1] += getAminoAcid(ALT[i:i+3])
+		for x in range(len(aminos)-n):
+			aminos[x+n] += getAminoAcid(GTs[x][i:i+3])
+	return aminos
+
+
+def main():
+	parser = OptionParser("./vcf_to_amino_acids --help")
+	parser.add_option('-v', dest="vcf", type=str, help="Vcf[.gz] Input file (default is stdin)")
+	parser.add_option('-o', dest="out", type=str, help="Output file name (default is stdout)")
+	parser.add_option('-r', dest="ref", type=str, help="Reference sequence file name in fasta format (required)")
+	parser.add_option('-s', dest="start", type=int, help="Gene start position (required)")
+	parser.add_option('-e', dest="end", type=int, help="Gene end position (required)")
+	parser.add_option('--rev', dest="rev", type=str, help="Whether the genotypes are reverse[yes] or forward[no] (default is no)")
+	parser.add_option('--alt', dest="alt", type=str, help="Include amino acids translated from altenate genotypes [yes|no](default is no)")
+	(options, args) = parser.parse_args()
+	
+	if sys.stdin.isatty() and not options.vcf:
+		println("Error: Specify input file")
+		parser.print_help() 
+		sys.exit(1)
+		
+	if options.vcf and not os.path.isfile(options.vcf):
+		println("Error: Vcf input file does not exist.")
+		sys.exit(1)
+
+	if not options.ref or not os.path.isfile(options.ref):
+		println("Error: no reference sequence file specified or does not exist.")
+		parser.print_help() 
+		sys.exit(1)
+		
+	if not options.start or not options.end:
+		println("Error: So start or end gene position specified.")
+		parser.print_help()
+		sys.exit(1)
+		
+	if options.start < 1 or options.end < 1:
+		println("Error: Start and end reference positions must be greater than zero (0).")
+		sys.exit(1)
+		
+	if options.start > options.end:
+		println("Error: Start position cannot be greater than end position.")
+		sys.exit(1)
+	
+	width = options.end - options.start + 1
+	if 9 > width or width > 9000:
+		println("Error: Sequence length cannot be less that nine (9) of greater than 6000")
+		sys.exit(1)
+		
+	if not width%3 == 0:
+		println("Error: The sequence length is not a product of three(3); lenght="+str(width))
+		sys.exit(1)
+		
+	isReverse = False
+	if options.rev and options.rev.strip().lower() == 'yes':
+		isReverse = True
+		
+	addAlt = False
+	if options.alt and options.alt.strip().lower() == 'yes':
+		addAlt = True
+	
+	# process reference file
+	with open(options.ref, 'r') as f:
+		isHead = True
+		REF = ''
+		nc = 0
+		for line in f:
+			line = line.strip()
+			if isHead:
+				if not line.startswith(">"):
+					println("Error: Reference sequence file not fasta file")
+					sys.exit(1)
+				isHead = False
+				continue
+			for ch in line:
+				nc += 1
+				if not ch.upper() in ('A','C','G','T','U'):
+					println("Error: Invalid nucleotide ("+ch+") found in reference file")
+					sys.exit(1)
+				if options.start <= nc and nc <= options.end:
+					REF += ch.upper()
+			if nc > options.end: 
+				break
+		if not width == len(REF):
+			println("Error: Reference file not complete")
+			sys.exit(1)
+			
+	
+	if not options.vcf: inp = sys.stdin
+	elif options.vcf.endswith('.gz'): inp = gzip.open(options.vcf, 'r')
+	else: inp = open(options.vcf, 'r')
+	if options.out: out = open(options.out, 'w')
+	else: out = sys.stdout
+	
+	(samples, GTs, ALT) = getGenotypes(inp, out, REF, options.start, options.end)
+	aminos = translate(GTs, REF, ALT, isReverse, addAlt)
+	
+	out.write("Reference\t"+aminos[0]+"\n")
+	n = 1 # sample starting point 
+	if addAlt:
+		out.write("Altenate\t"+aminos[1]+"\n")
+		n = 2
+	for (i, s) in enumerate(samples):
+		i *= 2
+		out.write(s+"_1\t"+aminos[i+n]+"\n")
+		out.write(s+"_2\t"+aminos[i+n+1]+"\n")
+			
+	if options.vcf: inp.close()
+	if options.out: out.close()
+	println("Done translating file")
+	
+	
+		
+
+if __name__ == "__main__":
+	main()
+	
+	
+

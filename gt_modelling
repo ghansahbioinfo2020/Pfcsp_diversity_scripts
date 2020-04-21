@@ -1,0 +1,43 @@
+#!/usr/bin/python
+
+
+
+filename = "SNPbiallic.vcf"
+f = open(filename, 'r')
+for line in f:
+	if line.startswith("#"):
+		print(line.strip())
+		continue
+	fields = line.split("\t")
+	fmt = fields[8]
+	fmts = fmt.split(":")
+	c = 0
+	for p in fmts:
+		if p.startswith("GT"):
+			pGT = c
+		if p.startswith("DP"):
+			pDP = c
+		if p.startswith("AD"):
+			pAD = c
+		c = c + 1
+	samples = []
+	for s in fields[9:]:
+		sf = s.split(":")
+		DP = int(sf[pDP])
+		AD = sf[pAD]
+		if DP < 5:
+			sf[pGT] = "./."
+		else: 
+			AD = AD.split(",")
+			r = int(AD[0])
+			a = int(AD[1])
+			if r>=2 and a>=2:
+				sf[pGT] = "0/1"
+			elif r>=2 and  a<2:
+				sf[pGT] = "0/0"
+			elif r<2 and  a>=2:
+				sf[pGT] = "1/1"
+		samples.append(':'.join(sf))
+
+	data = '\t'.join(fields[:9])+'\t'+'\t'.join(samples)
+	print(data.strip())

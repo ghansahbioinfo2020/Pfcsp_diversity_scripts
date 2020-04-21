@@ -95,7 +95,7 @@ def getGenotypes(inp, out, REF, start, end):
 	
 
 def main():
-	parser = OptionParser("./vcf_to_amino_acids --help")
+	parser = OptionParser("./vcf_to_fasta --help")
 	parser.add_option('-v', dest="vcf", type=str, help="Vcf[.gz] Input file (default is stdin)")
 	parser.add_option('-o', dest="out", type=str, help="Output file name (default is stdout)")
 	parser.add_option('-r', dest="ref", type=str, help="Reference sequence file name in fasta format (required)")
@@ -195,7 +195,7 @@ def main():
 			
 	if options.vcf: inp.close()
 	if options.out: out.close()
-	println("Done translating file")
+	println("Done")
 		
 
 if __name__ == "__main__":
